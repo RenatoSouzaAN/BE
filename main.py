@@ -123,57 +123,52 @@ async def get_tasks_by_id(id: int):
 @app.post("/tasks", status_code=201)
 async def create_task(task: TaskCreate):
     """Create a new task."""
-    con = sqlite3.connect("tasks.db")
-    cur = con.cursor()
-    new_task = None
-    if not task.title:
-        return JSONResponse(status_code=400, content={"error": "Title is required."})
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            new_task = None
+            if not task.title:
+                return JSONResponse(status_code=400, content={"error": "Title is required."})
 
-    cur.execute("INSERT INTO tasks (title, done, created_at, updated_at) VALUES (?, ?, ?, ?)", (task.title, False, datetime.now(), datetime.now()))
-    con.commit()
-    new_id = cur.lastrowid
-    cur.execute("SELECT * FROM tasks WHERE id = ?", (new_id,))
-    new_task = cur.fetchone()
-    con.close()
+            cur.execute("INSERT INTO tasks (title, done, created_at, updated_at) VALUES (%s, %s, %s, %s) RETURNING *", (task.title, False, datetime.now(), datetime.now()))
+            conn.commit()
+            new_task = cur.fetchone()
 
-    return row_to_task(new_task)
+            return row_to_task(new_task)
 
 @app.put("/tasks/{id}")
 async def update_task(id: int, task: TaskUpdate):
     """Update a task by its ID."""
-    con = sqlite3.connect("tasks.db")
-    cur = con.cursor()
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM tasks WHERE id = %s", (id,))
+            currentValue = cur.fetchone()
+            if currentValue:
+                if task.title is None and task.done is None:
+                    return JSONResponse(status_code=400, content={"error": "At least one field to update is required."})
 
-    cur.execute("SELECT * FROM tasks WHERE id = ?", (id,))
-    currentValue = cur.fetchone()
-    if task.title is None and task.done is None:
-        return JSONResponse(status_code=400, content={"error": "At least one field to update is required."})
+                if task.title is None:
+                    task.title = currentValue[1]
+                if task.done is None:
+                    task.done = currentValue[2]
 
-    if task.title is None:
-        task.title = currentValue[1]
-    if task.done is None:
-        task.done = currentValue[2]
-
-    cur.execute("UPDATE tasks SET title = ?, done = ?, updated_at = ? WHERE id = ?", (task.title, task.done, datetime.now(), id))
-    con.commit()
-    cur.execute("SELECT * FROM tasks WHERE id = ?", (id,))
-    updated_task = cur.fetchone()
-    con.close()
-
-    return row_to_task(updated_task)
+                cur.execute("UPDATE tasks SET title = %s, done = %s, updated_at = %s WHERE id = %s RETURNING *", (task.title, task.done, datetime.now(), id))
+                conn.commit()
+                updated_task = cur.fetchone()
+                return row_to_task(updated_task)
+            else:
+                return JSONResponse(status_code=404,content={"error": f"Task {id} not found"})
 
 @app.delete("/tasks/{id}", status_code=204)
 async def delete_task_by_id(id: int):
     """Delete a task by its ID."""
-    con = sqlite3.connect("tasks.db")
-    cur = con.cursor()
-   
-    cur.execute("DELETE FROM tasks WHERE id = ?", (id,))
-    con.commit()
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:   
+            cur.execute("DELETE FROM tasks WHERE id = %s", (id,))
+            conn.commit()
 
-    if cur.rowcount == 0:
-        con.close()
-        return JSONResponse(status_code=404, content={"error": f"Task {id} not found"})
-    
-    con.close()
-    return Response(status_code=204)
+            if cur.rowcount == 0:
+                conn.close()
+                return JSONResponse(status_code=404, content={"error": f"Task {id} not found"})
+            
+            conn.close()
+            return Response(status_code=204)
