@@ -1,16 +1,18 @@
 # Task API
 
-FastAPI CRUD to-do list with SQLite done as an exercise for the AI Back-end track.
+FastAPI CRUD to-do list with PostgreSQL + docker, done as an exercise for the AI Back-end track.
 
 ## Requirements
 
 - Python 3.10+
+- Docker application
 
 ## Database
 
-SQLite was chosen as it requires no extra steps for it's usage. As it's a simple project, it being a single file is perfect for the current complexity, and it does its purpose of retaining the data through server restarts.
+PostgreSQL was chosen as it is one of the most used database management systems around the world. And for preventing environment running issues, we're pairing it with docker for an efficient solution.
 
-The database open in DBeaver:
+<!-- Will be changed in future commits -->
+<!-- The database open in DBeaver:
 ![Database](db.png)
 
 Running a query for fetching all items in the database:
@@ -20,7 +22,7 @@ Running a query for fetching all items in the database:
 
 `created_at` and `updated_at` are stored in SQLite but not returned by the API, by choice.
 
-Changing `CREATE TABLE` only affects **new** database files. An existing `tasks.db` keeps the old schema. For this project, delete `tasks.db` and restart the app (it recreates and seeds itself). In larger apps you'd use a migration tool (`ALTER TABLE` / Alembic) instead of deleting data.
+Changing `CREATE TABLE` only affects **new** database files. An existing `tasks.db` keeps the old schema. For this project, delete `tasks.db` and restart the app (it recreates and seeds itself). In larger apps you'd use a migration tool (`ALTER TABLE` / Alembic) instead of deleting data. -->
 
 ## Install & run
 
@@ -29,6 +31,15 @@ python -m venv .venv
 source .venv/Scripts/activate
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
+```
+
+Make sure to install docker desktop or any other docker-like application
+
+Then run:
+
+```bash
+docker run --name taskdb -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=tasks \
+-p 5432:5432 -v taskdata:/var/lib/postgresql -d postgres
 ```
 
 Then open:
