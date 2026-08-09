@@ -78,28 +78,26 @@ async def reset_tasks_list():
 @app.get("/tasks")
 async def get_tasks(done: bool | None = None, search: str | None = None):
     """List all tasks."""
-    con = sqlite3.connect("tasks.db")
-    cur = con.cursor()
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            clauses = []
+            params = []
 
-    clauses = []
-    params = []
+            if done is not None:
+                clauses.append("done = %s")
+                params.append(done)
 
-    if done is not None:
-        clauses.append("done = ?")
-        params.append(done)
+            if search is not None:
+                clauses.append("LOWER(title) LIKE LOWER(%s)")
+                params.append(f"%{search}%")
 
-    if search is not None:
-        clauses.append("LOWER(title) LIKE LOWER(?)")
-        params.append(f"%{search}%")
+            query = "SELECT * FROM tasks"
+            if clauses:
+                query += " WHERE " + " AND ".join(clauses)
 
-    query = "SELECT * FROM tasks"
-    if clauses:
-        query += " WHERE " + " AND ".join(clauses)
-
-    cur.execute(query, params)
-    filtered_tasks = cur.fetchall()
-    con.close()
-    return [row_to_task(row) for row in filtered_tasks]
+            cur.execute(query, params)
+            filtered_tasks = cur.fetchall()
+            return [row_to_task(row) for row in filtered_tasks]
 
 @app.get("/tasks/stats")
 async def get_tasks_stats():
@@ -113,14 +111,14 @@ async def get_tasks_stats():
 @app.get("/tasks/{id}")
 async def get_tasks_by_id(id: int):
     """Get a task by its ID."""
-    con = sqlite3.connect("tasks.db")
-    cur = con.cursor()
-    cur.execute("SELECT * FROM tasks WHERE id = ?", (id,))
-    task = cur.fetchone()
-    if task:
-        return row_to_task(task)
-    else:
-        return JSONResponse(status_code=404,content={"error": f"Task {id} not found"})
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM tasks WHERE id = %s", (id,))
+            task = cur.fetchone()
+            if task:
+                return row_to_task(task)
+            else:
+                return JSONResponse(status_code=404,content={"error": f"Task {id} not found"})
 
 @app.post("/tasks", status_code=201)
 async def create_task(task: TaskCreate):
