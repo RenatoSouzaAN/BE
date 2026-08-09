@@ -1,10 +1,16 @@
 from datetime import datetime
+import os
 import sqlite3
 from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse
 from pydantic.main import BaseModel
+from dotenv import load_dotenv
+import psycopg
 
 app = FastAPI()
+
+load_dotenv()
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 class Task(BaseModel):
     id: int
@@ -27,17 +33,16 @@ SEED_TASKS = [
 tasks = [task.copy() for task in SEED_TASKS]
 
 def init_db():
-    con = sqlite3.connect("tasks.db")
-    cur = con.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, done INTEGER, created_at TEXT, updated_at TEXT)")
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE TABLE IF NOT EXISTS tasks (id SERIAL PRIMARY KEY, title TEXT, done BOOLEAN, created_at TEXT, updated_at TEXT)")
     
-    cur.execute("SELECT COUNT(*) FROM tasks")
-    count = cur.fetchone()[0]
-    if count == 0:
-        for task in SEED_TASKS:
-            cur.execute("INSERT INTO tasks (title, done, created_at, updated_at) VALUES (?, ?, ?, ?)", (task["title"], task["done"], task["created_at"], task["updated_at"]))
-    con.commit()
-    con.close()
+            cur.execute("SELECT COUNT(*) FROM tasks")
+            count = cur.fetchone()[0]
+            if count == 0:
+                for task in SEED_TASKS:
+                    cur.execute("INSERT INTO tasks (title, done, created_at, updated_at) VALUES (%s, %s, %s, %s)", (task["title"], task["done"], task["created_at"], task["updated_at"]))
+            conn.commit()
 
 init_db()
 
