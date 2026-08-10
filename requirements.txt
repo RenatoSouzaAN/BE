@@ -41,4 +41,4 @@ urllib3==2.7.0
 uvicorn==0.51.0
 watchfiles==1.2.0
 websockets==16.1.1
-psycopg[binary]==3.5.13
+psycopg[binary]==3.3.4
