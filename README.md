@@ -11,26 +11,33 @@ FastAPI CRUD to-do list with PostgreSQL + docker, done as an exercise for the AI
 
 PostgreSQL was chosen as it is one of the most used database management systems around the world. And for preventing environment running issues, we're pairing it with docker for an efficient solution.
 
-<!-- Will be changed in future commits -->
-<!-- The database open in DBeaver:
-![Database](db.png)
+The database open in DBeaver:
+![Database](db_in_docker.png)
 
-Running a query for fetching all items in the database:
-![DatabaseQuery](db_queryrun.png)
+## Environment files
+Run this command to copy .env.example as .env
 
-### Adding Timestamps
+```bash
+cp .env.example .env
+```
 
-`created_at` and `updated_at` are stored in SQLite but not returned by the API, by choice.
+Then update the relevant data for the DB name, password, and add it to the URL.
 
-Changing `CREATE TABLE` only affects **new** database files. An existing `tasks.db` keeps the old schema. For this project, delete `tasks.db` and restart the app (it recreates and seeds itself). In larger apps you'd use a migration tool (`ALTER TABLE` / Alembic) instead of deleting data. -->
+Compose injects `DATABASE_URL` with host `db` for the `api` service; for local uvicorn use `localhost` in `.env`.
 
-## Install & run
+## Install & run (docker)
+
+```bash
+docker compose up -d
+```
+
+## Install & run (locally)
 
 ```bash
 python -m venv .venv
 source .venv/Scripts/activate
 pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+uvicorn main:app --reload --port 8008
 ```
 
 Make sure to install docker desktop or any other docker-like application
@@ -44,8 +51,8 @@ docker run --name taskdb -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=tasks \
 
 Then open:
 
-- API: http://localhost:8000
-- Swagger UI: http://localhost:8000/docs
+- API: http://localhost:8008
+- Swagger UI: http://localhost:8008/docs
 
 ## Endpoints
 
@@ -64,12 +71,12 @@ Then open:
 ## Example
 
 ```bash
-curl -i http://localhost:8000/tasks
+curl -i http://localhost:8008/tasks
 ```
 
 ```
 HTTP/1.1 200 OK
-date: Mon, 27 Jul 2026 15:16:07 GMT
+date: Tue, 11 Aug 2026 00:09:03 GMT
 server: uvicorn
 content-length: 116
 content-type: application/json

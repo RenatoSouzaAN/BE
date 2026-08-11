@@ -1,6 +1,5 @@
 from datetime import datetime
 import os
-import sqlite3
 from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse
 from pydantic.main import BaseModel
@@ -29,8 +28,6 @@ SEED_TASKS = [
     {"id": 2, "title": "Task 2", "done": False, "created_at": datetime.now(), "updated_at": datetime.now()},
     {"id": 3, "title": "Task 3", "done": True, "created_at": datetime.now(), "updated_at": datetime.now()},
 ]
-
-tasks = [task.copy() for task in SEED_TASKS]
 
 def init_db():
     with psycopg.connect(DATABASE_URL) as conn:
@@ -71,8 +68,12 @@ async def health():
 @app.post("/reset")
 async def reset_tasks_list():
     """Reset the tasks list."""
-    global tasks
-    tasks = [task.copy() for task in SEED_TASKS]
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE tasks RESTART IDENTITY")
+            for task in SEED_TASKS:
+                cur.execute("INSERT INTO tasks (title, done, created_at, updated_at) VALUES (%s, %s, %s, %s)", (task["title"], task["done"], task["created_at"], task["updated_at"]))
+            conn.commit()
     return JSONResponse(status_code=200, content={"message": "Tasks list reset successfully."})
 
 @app.get("/tasks")
@@ -102,10 +103,14 @@ async def get_tasks(done: bool | None = None, search: str | None = None):
 @app.get("/tasks/stats")
 async def get_tasks_stats():
     """Get the statistics of the tasks."""
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*), COUNT(*) FILTER (WHERE done), COUNT(*) FILTER (WHERE NOT done) FROM tasks")
+            total, done_count, pending = cur.fetchone()
     return {
-        "total": len(tasks),
-        "done": sum(1 for task in tasks if task["done"]),
-        "pending": sum(1 for task in tasks if not task["done"])
+        "total": total or 0,
+        "done": done_count or 0,
+        "pending": pending or 0,
     }
 
 @app.get("/tasks/{id}")
