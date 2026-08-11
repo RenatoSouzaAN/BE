@@ -1,0 +1,30 @@
+services:
+  api:
+    build: .
+    ports: ["8002:8000"]
+    environment:
+      - DATABASE_URL=postgresql://postgres:dev@db:5432/tasks
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  db:
+    image: postgres
+    environment:
+      - POSTGRES_PASSWORD=dev
+      - POSTGRES_DB=tasks
+    volumes:
+      - taskdata_ai:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d tasks"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5434:5432"
+
+volumes:
+  taskdata_ai:
