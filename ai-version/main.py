@@ -1,15 +1,19 @@
 from datetime import datetime
-import sqlite3
+import os
 
-from fastapi import FastAPI, HTTPException, Response
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+import psycopg
 
-DB_PATH = "tasks.db"
+load_dotenv()
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 app = FastAPI(
     title="Task API",
-    description="SQLite to-do list CRUD API (AI rematch A2 version).",
-    version="2.0",
+    description="PostgreSQL to-do list CRUD API (AI rematch A3 version).",
+    version="3.0",
 )
 
 
@@ -35,8 +39,18 @@ SEED_TASKS: list[dict] = [
 ]
 
 
-def get_connection() -> sqlite3.Connection:
-    return sqlite3.connect(DB_PATH)
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_request: Request, exc: HTTPException):
+    """Keep errors flat as {\"error\": \"...\"} instead of FastAPI's detail wrapper."""
+    if isinstance(exc.detail, dict) and "error" in exc.detail:
+        return JSONResponse(status_code=exc.status_code, content=exc.detail)
+    return JSONResponse(status_code=exc.status_code, content={"error": str(exc.detail)})
+
+
+def get_connection() -> psycopg.Connection:
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not set")
+    return psycopg.connect(DATABASE_URL)
 
 
 def row_to_task(row: tuple) -> dict:
@@ -48,29 +62,35 @@ def row_to_task(row: tuple) -> dict:
 
 
 def init_db() -> None:
-    con = get_connection()
-    cur = con.cursor()
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            done INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-        """
-    )
-    cur.execute("SELECT COUNT(*) FROM tasks")
-    if cur.fetchone()[0] == 0:
-        now = datetime.now().isoformat()
-        for task in SEED_TASKS:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO tasks (id, title, done, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (task["id"], task["title"], int(task["done"]), now, now),
+                """
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id SERIAL PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    done BOOLEAN NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
             )
-    con.commit()
-    con.close()
+            cur.execute("SELECT COUNT(*) FROM tasks")
+            if cur.fetchone()[0] == 0:
+                now = datetime.now().isoformat()
+                for task in SEED_TASKS:
+                    cur.execute(
+                        """
+                        INSERT INTO tasks (id, title, done, created_at, updated_at)
+                        VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (task["id"], task["title"], task["done"], now, now),
+                    )
+                cur.execute(
+                    "SELECT setval(pg_get_serial_sequence('tasks', 'id'), "
+                    "(SELECT COALESCE(MAX(id), 1) FROM tasks))"
+                )
+            conn.commit()
 
 
 init_db()
@@ -78,11 +98,11 @@ init_db()
 
 @app.get("/", summary="API info")
 async def root():
-    """Return API name, version, and available endpoints."""
+    """Return API name, version, storage, and available endpoints."""
     return {
         "name": "Task API",
-        "version": "2.0",
-        "storage": "sqlite3",
+        "version": "3.0",
+        "storage": "postgresql + psycopg",
         "endpoints": [
             "/health",
             "/reset",
@@ -102,56 +122,63 @@ async def health():
 @app.post("/reset", summary="Reset tasks")
 async def reset_tasks():
     """Delete all tasks and restore the original three seed tasks."""
-    con = get_connection()
-    cur = con.cursor()
-    cur.execute("DELETE FROM tasks")
-    cur.execute("DELETE FROM sqlite_sequence WHERE name = 'tasks'")
     now = datetime.now().isoformat()
-    for task in SEED_TASKS:
-        cur.execute(
-            "INSERT INTO tasks (id, title, done, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-            (task["id"], task["title"], int(task["done"]), now, now),
-        )
-    con.commit()
-    con.close()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE tasks RESTART IDENTITY")
+            for task in SEED_TASKS:
+                cur.execute(
+                    """
+                    INSERT INTO tasks (title, done, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (task["title"], task["done"], now, now),
+                )
+            conn.commit()
     return {"message": "Tasks list reset successfully."}
 
 
 @app.get("/tasks", summary="List tasks")
 async def list_tasks(done: bool | None = None, search: str | None = None):
     """List all tasks, optionally filtered by done status and/or title search."""
-    con = get_connection()
-    cur = con.cursor()
-
     clauses: list[str] = []
     params: list = []
 
     if done is not None:
-        clauses.append("done = ?")
-        params.append(int(done))
+        clauses.append("done = %s")
+        params.append(done)
 
     if search is not None:
-        clauses.append("LOWER(title) LIKE LOWER(?)")
+        clauses.append("LOWER(title) LIKE LOWER(%s)")
         params.append(f"%{search}%")
 
-    query = "SELECT id, title, done, created_at, updated_at FROM tasks"
+    query = "SELECT id, title, done FROM tasks"
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY id"
 
-    cur.execute(query, params)
-    rows = cur.fetchall()
-    con.close()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
     return [row_to_task(row) for row in rows]
 
 
 @app.get("/tasks/stats", summary="Task stats")
 async def task_stats():
     """Return total, done, and pending task counts from the database."""
-    con = get_connection()
-    cur = con.cursor()
-    cur.execute("SELECT COUNT(*), SUM(done), SUM(CASE WHEN done = 0 THEN 1 ELSE 0 END) FROM tasks")
-    total, done_count, pending = cur.fetchone()
-    con.close()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*),
+                    COUNT(*) FILTER (WHERE done),
+                    COUNT(*) FILTER (WHERE NOT done)
+                FROM tasks
+                """
+            )
+            total, done_count, pending = cur.fetchone()
     return {
         "total": total or 0,
         "done": done_count or 0,
@@ -162,16 +189,15 @@ async def task_stats():
 @app.get("/tasks/{task_id}", summary="Get task")
 async def get_task(task_id: int):
     """Return a single task by ID, or 404 if it does not exist."""
-    con = get_connection()
-    cur = con.cursor()
-    cur.execute(
-        "SELECT id, title, done, created_at, updated_at FROM tasks WHERE id = ?",
-        (task_id,),
-    )
-    row = cur.fetchone()
-    con.close()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, title, done FROM tasks WHERE id = %s",
+                (task_id,),
+            )
+            row = cur.fetchone()
     if row is None:
-        raise HTTPException(status_code=404, detail={"error": f"Task {task_id} not found"})
+        raise HTTPException(status_code=404, detail={"error": "Task not found"})
     return row_to_task(row)
 
 
@@ -182,20 +208,18 @@ async def create_task(payload: TaskCreate):
         raise HTTPException(status_code=400, detail={"error": "Title is required."})
 
     now = datetime.now().isoformat()
-    con = get_connection()
-    cur = con.cursor()
-    cur.execute(
-        "INSERT INTO tasks (title, done, created_at, updated_at) VALUES (?, ?, ?, ?)",
-        (payload.title.strip(), 0, now, now),
-    )
-    con.commit()
-    new_id = cur.lastrowid
-    cur.execute(
-        "SELECT id, title, done, created_at, updated_at FROM tasks WHERE id = ?",
-        (new_id,),
-    )
-    row = cur.fetchone()
-    con.close()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO tasks (title, done, created_at, updated_at)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id, title, done
+                """,
+                (payload.title.strip(), False, now, now),
+            )
+            row = cur.fetchone()
+            conn.commit()
     return row_to_task(row)
 
 
@@ -210,44 +234,42 @@ async def update_task(task_id: int, payload: TaskUpdate):
     if payload.title is not None and not payload.title.strip():
         raise HTTPException(status_code=400, detail={"error": "Title cannot be empty."})
 
-    con = get_connection()
-    cur = con.cursor()
-    cur.execute(
-        "SELECT id, title, done, created_at, updated_at FROM tasks WHERE id = ?",
-        (task_id,),
-    )
-    row = cur.fetchone()
-    if row is None:
-        con.close()
-        raise HTTPException(status_code=404, detail={"error": f"Task {task_id} not found"})
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, title, done FROM tasks WHERE id = %s",
+                (task_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail={"error": "Task not found"})
 
-    title = payload.title.strip() if payload.title is not None else row[1]
-    done = int(payload.done) if payload.done is not None else row[2]
-    now = datetime.now().isoformat()
+            title = payload.title.strip() if payload.title is not None else row[1]
+            done = payload.done if payload.done is not None else row[2]
+            now = datetime.now().isoformat()
 
-    cur.execute(
-        "UPDATE tasks SET title = ?, done = ?, updated_at = ? WHERE id = ?",
-        (title, done, now, task_id),
-    )
-    con.commit()
-    cur.execute(
-        "SELECT id, title, done, created_at, updated_at FROM tasks WHERE id = ?",
-        (task_id,),
-    )
-    updated = cur.fetchone()
-    con.close()
+            cur.execute(
+                """
+                UPDATE tasks
+                SET title = %s, done = %s, updated_at = %s
+                WHERE id = %s
+                RETURNING id, title, done
+                """,
+                (title, done, now, task_id),
+            )
+            updated = cur.fetchone()
+            conn.commit()
     return row_to_task(updated)
 
 
 @app.delete("/tasks/{task_id}", status_code=204, summary="Delete task")
 async def delete_task(task_id: int):
     """Delete a task by ID. Returns 204 with an empty body on success."""
-    con = get_connection()
-    cur = con.cursor()
-    cur.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-    con.commit()
-    deleted = cur.rowcount
-    con.close()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM tasks WHERE id = %s", (task_id,))
+            deleted = cur.rowcount
+            conn.commit()
     if deleted == 0:
-        raise HTTPException(status_code=404, detail={"error": f"Task {task_id} not found"})
+        raise HTTPException(status_code=404, detail={"error": "Task not found"})
     return Response(status_code=204)
