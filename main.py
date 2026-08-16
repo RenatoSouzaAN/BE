@@ -1,15 +1,26 @@
-from datetime import datetime
 import os
+import psycopg
+
+from datetime import datetime
 from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse
 from pydantic.main import BaseModel
 from dotenv import load_dotenv
-import psycopg
+from supabase import create_client, Client
 
 app = FastAPI()
 
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+url: str = os.getenv("SUPABASE_URL")
+key: str = os.getenv("SUPABASE_KEY")
+
+if not url or not key:
+    raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set in .env")
+
+supabase: Client = create_client(url, key)
+print("Server running and connected to Supabase")
 
 class Task(BaseModel):
     id: int
