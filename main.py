@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from pydantic.main import BaseModel
 from dotenv import load_dotenv
 from supabase import create_client, Client
+from supabase_auth.errors import AuthApiError
 
 app = FastAPI()
 
@@ -21,6 +22,14 @@ if not url or not key:
 
 supabase: Client = create_client(url, key)
 print("Server running and connected to Supabase")
+
+class UserCreate(BaseModel):
+    email: str
+    password: str
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
 
 class Task(BaseModel):
     id: int
@@ -75,6 +84,39 @@ async def health():
     Returns a dictionary with the status of the API.
     """
     return {"status": "ok"}
+
+@app.post("/auth/signup", status_code=201)
+async def signup(user: UserCreate):
+    """Sign up a new user."""
+    if not user or not user.email or not user.password:
+        return JSONResponse(status_code=400, content={"error": "Email and password are required"})
+
+    response = supabase.auth.sign_up({
+        "email": user.email,
+        "password": user.password,
+    })
+    return response.user
+
+@app.post("/auth/login", status_code=200)
+async def login(user: UserLogin):
+    """Sign in a user."""
+    if not user or not user.email or not user.password:
+        return JSONResponse(status_code=400, content={"error": "Email and password are required"})
+    try:
+        response = supabase.auth.sign_in_with_password({
+            "email": user.email,
+            "password": user.password,
+        })
+    except AuthApiError:
+        return JSONResponse(status_code=401, content={"error": "Invalid login credentials"})
+
+    if response.session is None:
+        return JSONResponse(status_code=401, content={"error": "Invalid login credentials"})
+    
+    return {
+        "access_token": response.session.access_token,
+        "refresh_token": response.session.refresh_token,
+    }
 
 @app.post("/reset")
 async def reset_tasks_list():
