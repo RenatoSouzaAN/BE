@@ -2,7 +2,7 @@ import os
 import psycopg
 
 from datetime import datetime
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic.main import BaseModel
 from dotenv import load_dotenv
@@ -117,6 +117,24 @@ async def login(user: UserLogin):
         "access_token": response.session.access_token,
         "refresh_token": response.session.refresh_token,
     }
+
+@app.get("/public/info")
+async def get_public_info():
+    """Get public information."""
+    return JSONResponse(status_code=200, content={"message": "Welcome, Stranger! This info is public."})
+
+@app.get("/protected/profile")
+async def get_protected_info(request: Request):
+    """Get protected profile information."""
+    auth = request.headers.get("Authorization")
+    if auth is None or not auth.startswith("Bearer "):
+        return JSONResponse(status_code=401, content={"error": "Access token required"})
+
+    token = auth.removeprefix("Bearer ").strip()
+    if not token:
+        return JSONResponse(status_code=401, content={"error": "Access token required"})
+
+    return JSONResponse(status_code=200, content={"message": f"Welcome, User! This info is protected."})
 
 @app.post("/reset")
 async def reset_tasks_list():
