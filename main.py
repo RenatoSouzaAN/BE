@@ -134,7 +134,22 @@ async def get_protected_info(request: Request):
     if not token:
         return JSONResponse(status_code=401, content={"error": "Access token required"})
 
-    return JSONResponse(status_code=200, content={"message": f"Welcome, User! This info is protected."})
+    try:
+        response = supabase.auth.get_user(token)
+    except AuthApiError:
+        return JSONResponse(status_code=401, content={"error": "Invalid or expired token"})
+
+    if response.user is None:
+        return JSONResponse(status_code=401, content={"error": "Invalid or expired token"})
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "id": response.user.id,
+            "email": response.user.email,
+            "created_at": response.user.created_at.isoformat() if response.user.created_at else None,
+        },
+    )
 
 @app.post("/reset")
 async def reset_tasks_list():
