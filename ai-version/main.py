@@ -1,20 +1,33 @@
+from contextlib import asynccontextmanager
 from datetime import datetime
 import os
+from typing import Annotated
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 import psycopg
+from supabase import Client, create_client
+from supabase_auth.errors import AuthApiError
 
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-app = FastAPI(
-    title="Task API",
-    description="PostgreSQL to-do list CRUD API (AI rematch A3 version).",
-    version="3.0",
-)
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set in .env")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+security = HTTPBearer(auto_error=False)
+
+
+class UserCredentials(BaseModel):
+    email: str | None = None
+    password: str | None = None
 
 
 class Task(BaseModel):
@@ -39,14 +52,6 @@ SEED_TASKS: list[dict] = [
 ]
 
 
-@app.exception_handler(HTTPException)
-async def http_exception_handler(_request: Request, exc: HTTPException):
-    """Keep errors flat as {\"error\": \"...\"} instead of FastAPI's detail wrapper."""
-    if isinstance(exc.detail, dict) and "error" in exc.detail:
-        return JSONResponse(status_code=exc.status_code, content=exc.detail)
-    return JSONResponse(status_code=exc.status_code, content={"error": str(exc.detail)})
-
-
 def get_connection() -> psycopg.Connection:
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL is not set")
@@ -59,6 +64,14 @@ def row_to_task(row: tuple) -> dict:
         "title": row[1],
         "done": bool(row[2]),
     }
+
+
+def iso_datetime(value) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
 
 
 def init_db() -> None:
@@ -93,18 +106,76 @@ def init_db() -> None:
             conn.commit()
 
 
-init_db()
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(
+    title="Task API",
+    description="PostgreSQL to-do list CRUD API with Supabase auth (AI rematch A4 version).",
+    version="4.0",
+    lifespan=lifespan,
+)
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_request: Request, exc: HTTPException):
+    """Keep errors flat as {"error": "..."} instead of FastAPI's detail wrapper."""
+    if isinstance(exc.detail, dict) and "error" in exc.detail:
+        return JSONResponse(status_code=exc.status_code, content=exc.detail)
+    return JSONResponse(status_code=exc.status_code, content={"error": str(exc.detail)})
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(_request: Request, exc: RequestValidationError):
+    """Turn Pydantic/FastAPI validation errors into the same flat error shape."""
+    first = exc.errors()[0] if exc.errors() else {}
+    return JSONResponse(
+        status_code=400,
+        content={"error": first.get("msg", "Invalid request")},
+    )
+
+
+def error(status_code: int, message: str) -> HTTPException:
+    return HTTPException(status_code=status_code, detail={"error": message})
+
+
+async def get_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
+):
+    """Resolve the logged-in Supabase user from a Bearer access token."""
+    if not credentials or not credentials.credentials:
+        raise error(401, "Access token required")
+
+    try:
+        response = supabase.auth.get_user(credentials.credentials)
+    except AuthApiError:
+        raise error(401, "Invalid or expired token")
+
+    if response.user is None:
+        raise error(401, "Invalid or expired token")
+
+    return response.user
 
 
 @app.get("/", summary="API info")
 async def root():
-    """Return API name, version, storage, and available endpoints."""
+    """Return API name, version, storage, auth, and available endpoints."""
     return {
         "name": "Task API",
-        "version": "3.0",
+        "version": "4.0",
         "storage": "postgresql + psycopg",
+        "auth": "supabase",
         "endpoints": [
             "/health",
+            "/auth/signup",
+            "/auth/login",
+            "/auth/logout",
+            "/protected/profile",
+            "/profile/dashboard",
+            "/public/info",
             "/reset",
             "/tasks",
             "/tasks/stats",
@@ -117,6 +188,86 @@ async def root():
 async def health():
     """Return a simple status payload used to verify the server is alive."""
     return {"status": "ok"}
+
+
+@app.post("/auth/signup", status_code=201, summary="Sign up")
+async def signup(user: UserCredentials):
+    """Create a new user in Supabase from email and password."""
+    if not user.email or not user.password:
+        raise error(400, "Email and password are required")
+
+    try:
+        response = supabase.auth.sign_up(
+            {"email": user.email, "password": user.password}
+        )
+    except AuthApiError as exc:
+        raise error(400, str(exc))
+
+    if response.user is None:
+        raise error(400, "Signup failed")
+
+    return {
+        "id": response.user.id,
+        "email": response.user.email,
+        "created_at": iso_datetime(response.user.created_at),
+    }
+
+
+@app.post("/auth/login", summary="Log in")
+async def login(user: UserCredentials):
+    """Authenticate with Supabase and return access and refresh tokens."""
+    if not user.email or not user.password:
+        raise error(400, "Email and password are required")
+
+    try:
+        response = supabase.auth.sign_in_with_password(
+            {"email": user.email, "password": user.password}
+        )
+    except AuthApiError:
+        raise error(401, "Invalid login credentials")
+
+    if response.session is None:
+        raise error(401, "Invalid login credentials")
+
+    return {
+        "access_token": response.session.access_token,
+        "refresh_token": response.session.refresh_token,
+    }
+
+
+@app.post("/auth/logout", status_code=204, summary="Log out")
+async def logout(_user=Depends(get_current_user)):
+    """Invalidate the current Supabase session. Returns 204 with an empty body."""
+    try:
+        supabase.auth.sign_out()
+    except AuthApiError:
+        raise error(401, "Invalid or expired token")
+    return Response(status_code=204)
+
+
+@app.get("/protected/profile", summary="Protected profile")
+async def get_protected_profile(user=Depends(get_current_user)):
+    """Return the logged-in user's id, email, and creation date."""
+    return {
+        "id": user.id,
+        "email": user.email,
+        "created_at": iso_datetime(user.created_at),
+    }
+
+
+@app.get("/profile/dashboard", summary="Protected dashboard")
+async def get_profile_dashboard(user=Depends(get_current_user)):
+    """Return the logged-in user's id and email for the dashboard."""
+    return {
+        "id": user.id,
+        "email": user.email,
+    }
+
+
+@app.get("/public/info", summary="Public info")
+async def get_public_info():
+    """Return a welcome message that does not require authentication."""
+    return {"message": "Welcome, Stranger! This info is public."}
 
 
 @app.post("/reset", summary="Reset tasks")
@@ -197,7 +348,7 @@ async def get_task(task_id: int):
             )
             row = cur.fetchone()
     if row is None:
-        raise HTTPException(status_code=404, detail={"error": "Task not found"})
+        raise error(404, f"Task {task_id} not found")
     return row_to_task(row)
 
 
@@ -205,7 +356,7 @@ async def get_task(task_id: int):
 async def create_task(payload: TaskCreate):
     """Create a new task with done=false and current timestamps."""
     if not payload.title or not payload.title.strip():
-        raise HTTPException(status_code=400, detail={"error": "Title is required."})
+        raise error(400, "Title is required.")
 
     now = datetime.now().isoformat()
     with get_connection() as conn:
@@ -227,12 +378,9 @@ async def create_task(payload: TaskCreate):
 async def update_task(task_id: int, payload: TaskUpdate):
     """Update title and/or done for an existing task; touches updated_at."""
     if payload.title is None and payload.done is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "At least one field to update is required."},
-        )
+        raise error(400, "At least one field to update is required.")
     if payload.title is not None and not payload.title.strip():
-        raise HTTPException(status_code=400, detail={"error": "Title cannot be empty."})
+        raise error(400, "Title cannot be empty.")
 
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -242,7 +390,7 @@ async def update_task(task_id: int, payload: TaskUpdate):
             )
             row = cur.fetchone()
             if row is None:
-                raise HTTPException(status_code=404, detail={"error": "Task not found"})
+                raise error(404, f"Task {task_id} not found")
 
             title = payload.title.strip() if payload.title is not None else row[1]
             done = payload.done if payload.done is not None else row[2]
@@ -271,5 +419,5 @@ async def delete_task(task_id: int):
             deleted = cur.rowcount
             conn.commit()
     if deleted == 0:
-        raise HTTPException(status_code=404, detail={"error": "Task not found"})
+        raise error(404, f"Task {task_id} not found")
     return Response(status_code=204)

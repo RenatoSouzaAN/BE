@@ -358,3 +358,117 @@ Best rematch prompt so far: storage, paths, body shapes, timestamps, and the fla
 - Stats / filter / search remain "feel free" extras — fine, but they keep drifting into every rematch.
 
 **If only one paragraph could be rewritten to raise this to a 10:** spell the ops contract — `ai-version/docker-compose.yml`, published ports, and `DATABASE_URL` host (`db` in Compose / `localhost` locally).
+
+### A4
+
+Fourth rematch: same Task API plus Supabase auth. `ai-version/main.py` now matches this stage. Ports **8050** (API) and **5440** (Postgres); volume/container **`ai-version`**.
+
+```bash
+cd ai-version
+cp .env.example .env
+# fill SUPABASE_URL and SUPABASE_KEY (same values as the root .env)
+docker compose up -d --build
+```
+
+- API: http://localhost:8050
+- Swagger UI: http://localhost:8050/docs
+- Postgres (host): `localhost:5440`
+
+#### Prompt used
+
+```
+Goal: You'll build an API with Authentication, that manages a to-do list, by creating tasks, reading, updating, and deleting them. Then update the README to contain what you have done, apart from the current contents of the readme, meaning you'll only add.
+
+Stack: FastApi + psycopg + supabase, with connection from DATABASE_URL. Swagger is included; add one-line description to each endpoint.
+
+Scope: Change only files inside "ai-version/" folder, for the exception of README.md. Containerize with docker.
+
+The task:
+Create an authentication system using Supabase, with 6 calls, POST /auth/signup, POST /auth/login, POST /auth/logout, GET /protected/profile, GET /profile/dashboard, and GET /public/info. They are independent from the next main calls.
+
+Create 5 main calls, GET /tasks and GET /tasks/{id}, a POST for creating a task, a PUT for updating a task, and a DELETE for deleting a task.
+
+For the information regarding supabase URL and KEY, use the one provided by me, in this case, look at my .env file.
+
+For Docker, you'll use ports 8050 and 5440 to avoid clashing with other composes.
+
+For Postgres, you'll bring you own container/volume, called ai-version. If there's a current one, feel free to remove it completely to create the new one.
+
+The jsons must follow this JSON pattern: { "id": "<int>", "title": <string>, "done": boolean }
+
+POST /tasks body: { "title": "<string>" }  (done defaults to false)
+PUT /tasks/{id} body: any of { "title": "...", "done": true|false } (partial update allowed)
+List endpoint returns an array of Task resources.
+
+DELETE /tasks{id} status 204, body: {No Content}
+
+Here's a seed for you to follow on how I want the data:
+"
+    {"id": 1, "title": "Task 1", "done": True, "created_at": datetime.now(), "updated_at": datetime.now()},
+    {"id": 2, "title": "Task 2", "done": False, "created_at": datetime.now(), "updated_at": datetime.now()},
+    {"id": 3, "title": "Task 3", "done": True, "created_at": datetime.now(), "updated_at": datetime.now()},
+"
+
+As you can see, every entry has timestamps, but we don't need to see them in API responses.
+
+But also create GETs for health check and api info.
+
+Health should return status, and api info as much info as you like without being verbose
+
+Errors must be returned as a flat JSON object with exactly this shape:
+{ "error": "<message>" }
+
+Do NOT wrap it in FastAPI's default { "detail": ... }.
+If you use HTTPException, ensure the client still sees { "error": "..." } at the top level
+(or avoid HTTPException and return JSONResponse with that body).
+Examples:
+- 404 → { "error": "Task {id} not found" }
+- 400 → { "error": "Title is required." }
+
+Feel free to add extras such as filtering by query parameters, searching with query parameters, and a post to reset all tasks to their original state.
+
+For the reset, if done, you have the default tasks above.
+```
+
+#### AI vs me
+
+**What the AI did better**
+- Closed the A3 ops gap: compose publishes **8050** / **5440**, names the Postgres container and volume `ai-version`, and injects `DATABASE_URL` with host `db` while `.env.example` keeps `localhost` for local uvicorn.
+- `HTTPBearer(auto_error=False)` plus the existing flat `HTTPException` handler — missing/invalid tokens return **401** `{"error": "Access token required"}` instead of FastAPI's default **403** `{"detail": "Not authenticated"}`. My hand-built `HTTPBearer()` still falls into that default unless every caller sends a header.
+- Also flattens `RequestValidationError` (empty/malformed bodies) to `{ "error": "..." }`. My version only flattened the routes I remembered to handle with `JSONResponse`.
+- `init_db()` runs on FastAPI lifespan/startup, not at import time — the A3 note about crashing if Postgres is down when uvicorn starts is actually fixed here.
+- Signup returns a small JSON dict (`id` / `email` / `created_at`) instead of dumping the raw Supabase `User` object, which is easier for clients and Swagger.
+- 404 now matches the tightened example: `"Task {id} not found"`. A3 had followed the older generic `"Task not found"`.
+
+**What it got wrong or decided differently**
+- Dashboard path is **`GET /profile/dashboard`** because that is what the prompt wrote. My hand-built API uses **`GET /protected/dashboard`**. Same idea, different URL — a silent contract split if both servers are compared in Swagger.
+- Still added `GET /tasks/stats` as a stretch (same extra as A1–A3 / hand-built).
+- Tasks stay public (prompt said auth is independent of CRUD) — same product choice as the hand-built API, not a bug, but easy to misread as "the whole API is protected".
+- Logout still calls `sign_out()` on the process-wide Supabase client (same shortcut I used). Fine for a lab; not a per-token revoke.
+
+**What the prompt forgot to specify**
+- Auth JSON bodies and responses: signup/login fields, whether login returns `access_token` + `refresh_token`, profile payload (`id` / `email` / `created_at`), and the exact 401 strings.
+- Dashboard path vs the existing `/protected/dashboard` from Stages 1–5.
+- Whether Swagger must expose Bearer auth (the AI added `HTTPBearer`, which is the useful default).
+
+**One rematch note:** A3 asked for an ops contract and A4 delivered it (ports, volume name, own Postgres). The new hole is the **auth contract** — named routes without request/response shapes, plus one path that does not match the hand-built API.
+
+#### Prompt rating: 9/10
+
+A3's missing ops paragraph is now in the prompt. Auth routes are named. The remaining 1 point is still contract precision, just moved from Docker to login/profile JSON.
+
+**What the prompt got right**
+- Stack locked: FastAPI + psycopg + Supabase + `DATABASE_URL` + Docker, still quarantined to `ai-version/` (+ README append).
+- Six auth paths named, and "independent from the next main calls" stops the AI from putting Bearer on CRUD by accident.
+- Ops contract named this time: ports **8050** / **5440**, own Postgres container/volume `ai-version`, reuse root `.env` keys.
+- Task JSON, partial PUT, timestamps hidden, flat `{ "error": "..." }`, and 404 with `{id}` all restated.
+- DELETE **204** + empty body called out again (A3 had dropped it).
+
+**Where it was weak**
+- Dashboard typo/mismatch: `/profile/dashboard` vs the hand-built `/protected/dashboard`.
+- Auth payloads unspecified (the A1 error-shape problem, now for signup/login/profile).
+- Path typo on DELETE: `DELETE /tasks{id}` missing `/` — same class of slip as A2.
+- Commit / README diary still mixed into the product prompt.
+- Stats / filter / search remain "feel free" extras.
+
+**If only one paragraph could be rewritten to raise this to a 10:** lock the auth JSON — signup/login body `{email, password}`, login response `{access_token, refresh_token}`, profile fields, 401 messages — and pick a single dashboard path (`/protected/dashboard`).
