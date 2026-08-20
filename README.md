@@ -1,15 +1,16 @@
 # Task API
 
-FastAPI CRUD to-do list with PostgreSQL + docker, done as an exercise for the AI Back-end track.
+FastAPI + Supabase Auth CRUD to-do list with PostgreSQL + docker, done as an exercise for the AI Back-end track.
 
 ## Requirements
 
 - Python 3.10+
 - Docker application
+- Supabase account
 
 ## Database
 
-PostgreSQL was chosen as it is one of the most used database management systems around the world. And for preventing environment running issues, we're pairing it with docker for an efficient solution.
+PostgreSQL was chosen as it is one of the most used database management systems around the world. And for preventing environment running issues, we're pairing it with docker for an efficient solution. Supabase was chosen as an Identity Provider, acting as a middleman and managing accounts and issuing JWTs.
 
 The database open in DBeaver:
 ![Database](db_in_docker.png)
@@ -21,14 +22,18 @@ Run this command to copy .env.example as .env
 cp .env.example .env
 ```
 
-Then update the relevant data for the DB name, password, and add it to the URL.
+Then update the relevant data for the DB name, password, and add it to the URL. Also update the data regarding your supabase project URL (SUPABASE_URL) and anon key (SUPABASE_KEY), and PORT. Don't type in your service_role, it bypasses all security. 
+
+On the Dashboard, disable 'Confirm email', so you are able to fresh login immediately.
 
 Compose injects `DATABASE_URL` with host `db` for the `api` service; for local uvicorn use `localhost` in `.env`.
+
+With Docker, open http://localhost:8008 (maps to 8000 in the container).
 
 ## Install & run (docker)
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
 ## Install & run (locally)
@@ -40,15 +45,6 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8008
 ```
 
-Make sure to install docker desktop or any other docker-like application
-
-Then run:
-
-```bash
-docker run --name taskdb -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=tasks \
--p 5432:5432 -v taskdata:/var/lib/postgresql -d postgres
-```
-
 Then open:
 
 - API: http://localhost:8008
@@ -56,19 +52,43 @@ Then open:
 
 ## Endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/` | API info (name, version, endpoints) |
-| GET | `/health` | Health check |
-| POST | `/reset` | Restore the 3 seed tasks |
-| GET | `/tasks` | List all tasks (?done=true|false, ?search=...) |
-| GET | `/tasks/stats` | Counts: total, done, pending |
-| GET | `/tasks/{id}` | Get a task by ID |
-| POST | `/tasks` | Create a new task |
-| PUT | `/tasks/{id}` | Update a task |
-| DELETE | `/tasks/{id}` | Delete a task |
+| Method | Path | Description | Auth Needed |
+|--------|------|-------------|-------------|
+| GET | `/` | API info (name, version, endpoints) | No |
+| POST | `/auth/signup` | Creates a user requiring email and password | No |
+| POST | `/auth/login` | Login into a user requiring email and password | No |
+| POST | `/auth/logout` | Logout of a user requiring Bearer access token | Bearer |
+| GET | `/protected/profile` | Checks a logged in user id, email, and creation date requiring Bearer access token | Bearer |
+| GET | `/protected/dashboard` | Checks a logged in user id and email requiring Bearer access token | Bearer |
+| GET | `/public/info` | Open welcome message | No |
+| GET | `/health` | Health check | No |
+| POST | `/reset` | Restore the 3 seed tasks | No |
+| GET | `/tasks` | List all tasks (?done=true|false, ?search=...) | No |
+| GET | `/tasks/stats` | Counts: total, done, pending | No |
+| GET | `/tasks/{id}` | Get a task by ID | No |
+| POST | `/tasks` | Create a new task | No |
+| PUT | `/tasks/{id}` | Update a task | No |
+| DELETE | `/tasks/{id}` | Delete a task | No |
 
-## Example
+## Example Auth (signup / login / profile)
+
+Sign-up
+```bash
+curl -i -X POST http://localhost:8008/auth/signup -H "Content-Type: application/json" -d "{\"email\":\"test@example.com\",\"password\":\"password123\"}"
+```
+
+Login
+```bash
+curl -i -X POST http://localhost:8008/auth/login -H "Content-Type: application/json" -d "{\"email\":\"test@example.com\",\"password\":\"password123\"}"
+```
+
+Get profile information
+```bash
+curl -i http://localhost:8008/protected/profile -H "Authorization: Bearer PASTE_ACCESS_TOKEN"
+```
+
+
+## Example Tasks
 
 ```bash
 curl -i http://localhost:8008/tasks
