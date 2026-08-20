@@ -1,15 +1,39 @@
-from datetime import datetime
 import os
-from fastapi import FastAPI, Response
+from typing import Annotated
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+import psycopg
+
+from datetime import datetime
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic.main import BaseModel
 from dotenv import load_dotenv
-import psycopg
+from supabase import create_client, Client
+from supabase_auth.errors import AuthApiError
 
 app = FastAPI()
 
+security = HTTPBearer()
+
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+url: str = os.getenv("SUPABASE_URL")
+key: str = os.getenv("SUPABASE_KEY")
+
+if not url or not key:
+    raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set in .env")
+
+supabase: Client = create_client(url, key)
+print("Server running and connected to Supabase")
+
+class UserCreate(BaseModel):
+    email: str
+    password: str
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
 
 class Task(BaseModel):
     id: int
@@ -50,6 +74,25 @@ def row_to_task(row):
         "done": bool(row[2]),
     }
 
+async def get_current_user(credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)]):
+    """Get the current user from the request headers."""
+    if not credentials or not credentials.credentials:
+        raise HTTPException(status_code=401, detail="Access token required")
+
+    token = credentials.credentials
+    if not token:
+        raise HTTPException(status_code=401, detail="Access token required")
+
+    try:
+        response = supabase.auth.get_user(token)
+    except AuthApiError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    if response.user is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    return response.user
+
 @app.get("/")
 async def root():
     """
@@ -64,6 +107,76 @@ async def health():
     Returns a dictionary with the status of the API.
     """
     return {"status": "ok"}
+
+@app.post("/auth/signup", status_code=201)
+async def signup(user: UserCreate):
+    """Sign up a new user."""
+    if not user or not user.email or not user.password:
+        return JSONResponse(status_code=400, content={"error": "Email and password are required"})
+
+    response = supabase.auth.sign_up({
+        "email": user.email,
+        "password": user.password,
+    })
+    return response.user
+
+@app.post("/auth/login", status_code=200)
+async def login(user: UserLogin):
+    """Sign in a user."""
+    if not user or not user.email or not user.password:
+        return JSONResponse(status_code=400, content={"error": "Email and password are required"})
+    try:
+        response = supabase.auth.sign_in_with_password({
+            "email": user.email,
+            "password": user.password,
+        })
+    except AuthApiError:
+        return JSONResponse(status_code=401, content={"error": "Invalid login credentials"})
+
+    if response.session is None:
+        return JSONResponse(status_code=401, content={"error": "Invalid login credentials"})
+    
+    return {
+        "access_token": response.session.access_token,
+        "refresh_token": response.session.refresh_token,
+    }
+
+@app.get("/public/info")
+async def get_public_info():
+    """Get public information."""
+    return JSONResponse(status_code=200, content={"message": "Welcome, Stranger! This info is public."})
+
+@app.get("/protected/profile")
+async def get_protected_info(user=Depends(get_current_user)):
+    """Get protected profile information."""
+    return JSONResponse(
+        status_code=200,
+        content={
+            "id": user.id,
+            "email": user.email,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+        },
+    )
+
+@app.get("/protected/dashboard")
+async def get_protected_dashboard(user=Depends(get_current_user)):
+    """Get the protected dashboard."""
+    return JSONResponse(
+        status_code=200,
+        content={
+            "id": user.id,
+            "email": user.email,
+        },
+    )
+
+@app.post("/auth/logout", status_code=204)
+async def logout(user=Depends(get_current_user)):
+    """Logout a user."""
+    try:
+        supabase.auth.sign_out()
+    except AuthApiError:
+        return JSONResponse(status_code=401, content={"error": "Invalid or expired token"})
+    return Response(status_code=204)
 
 @app.post("/reset")
 async def reset_tasks_list():

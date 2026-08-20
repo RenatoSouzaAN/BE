@@ -1,7 +1,10 @@
+name: ai-version
+
 services:
   api:
     build: .
-    ports: ["8002:8000"]
+    ports: ["8050:8000"]
+    env_file: .env
     environment:
       - DATABASE_URL=postgresql://postgres:dev@db:5432/tasks
     depends_on:
@@ -13,18 +16,20 @@ services:
 
   db:
     image: postgres
+    container_name: ai-version
     environment:
       - POSTGRES_PASSWORD=dev
       - POSTGRES_DB=tasks
     volumes:
-      - taskdata_ai:/var/lib/postgresql
+      - ai-version:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d tasks"]
       interval: 5s
       timeout: 5s
       retries: 5
     ports:
-      - "5434:5432"
+      - "5440:5432"
 
 volumes:
-  taskdata_ai:
+  ai-version:
+    name: ai-version
