@@ -1,4 +1,6 @@
 import os
+from typing import Annotated
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import psycopg
 
 from datetime import datetime
@@ -10,6 +12,8 @@ from supabase import create_client, Client
 from supabase_auth.errors import AuthApiError
 
 app = FastAPI()
+
+security = HTTPBearer()
 
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -70,14 +74,12 @@ def row_to_task(row):
         "done": bool(row[2]),
     }
 
-async def get_current_user(request: Request):
+async def get_current_user(credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)]):
     """Get the current user from the request headers."""
-    auth = request.headers.get("Authorization")
-
-    if auth is None or not auth.startswith("Bearer "):
+    if not credentials or not credentials.credentials:
         raise HTTPException(status_code=401, detail="Access token required")
 
-    token = auth.removeprefix("Bearer ").strip()
+    token = credentials.credentials
     if not token:
         raise HTTPException(status_code=401, detail="Access token required")
 
